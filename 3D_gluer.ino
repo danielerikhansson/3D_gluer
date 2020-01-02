@@ -1,5 +1,12 @@
 // Includes
 
+/*
+ * TODO:
+ * Implement timer for doing analog read for set temp and speed: DONE
+ * Implement the speed control: IN PROGRESS
+ * Implement the temp control: DONE
+ */
+
 #include "3D_gluer.h"
 
 
@@ -9,10 +16,9 @@
 
 
 // Global variables
-float temp = 0;
-//int samples[THERM_NBR_SAMPLES];
 bool last_ed_on = false;
-bool enable = false;
+volatile bool enable = false;
+volatile int8_t set_temp = 0;
 
 
 
@@ -24,31 +30,29 @@ void setup() {
   Serial.println("Setup start");
 #endif
 
+  setup_timer1();
   setup_enable_rutine();
   setup_ed_stepper();
   setup_heater();
   setup_ADC();
   setup_pushbutton_step();
 
+  delay(500);
+
 }
-
-
 
 
 
 void loop() {
 
   if (enable == true) {
-    temp = read_thermistor();
-    int set_temp = read_temp_pot();
+    float temp = read_thermistor();
 
-    if  (temp < HEAT_LOWER_LIMIT) {
+    if  ( temp < (HEAT_DEFAULT_VALUE - HEAT_HYSTERESIS + set_temp) ) {
       heater_on();
-    } else if (temp > HEAT_UPPER_LIMIT) {
+    } else if ( temp > (HEAT_DEFAULT_VALUE + set_temp) ) {
       heater_off();
     }
-
-    int set_speed = read_speed_pot();
 
 #if 0
     Serial.print("Speed: ");
@@ -59,7 +63,7 @@ void loop() {
 
 //    int pushbutton_pressed = digitalRead(PUSHBUTTON_STEP);
     int pushbutton_pressed = (PINB & PUSHBUTTON_STEP_PORTB) >> 1;
-    if ( (pushbutton_pressed == LOW) && (temp > (HEAT_UPPER_LIMIT) * HEATER_WARM_ENOUGH_SCALE) ) {
+    if ( (pushbutton_pressed == LOW) && (temp > (HEAT_DEFAULT_VALUE + set_temp) * HEATER_WARM_ENOUGH_SCALE) ) {
       ed_steps_forward();
       last_ed_on = true;
     } else if (last_ed_on == true) {
@@ -93,7 +97,7 @@ void setup_ADC() {
   Serial.println("Setup thermistor");
 #endif
   ADCSRA &= ~(bit (ADPS0) | bit (ADPS1) | bit (ADPS2)); // clear prescaler bits
-  ADCSRA |= bit (ADPS0) | bit (ADPS2);                 //  32
+  ADCSRA |= bit (ADPS0) | bit (ADPS2);                  //  32
   analogReference(EXTERNAL);
 }
 
@@ -180,6 +184,23 @@ void reset_ed_pins()
   digitalWrite(ED_ENABLE_PIN, HIGH);
 }
 
+void set_step_speed(uint8_t step_speed) {
+
+   if(step_speed >= 75) {
+      CLR(PORTD, ED_MS1_PIN);
+      CLR(PORTD, ED_MS2_PIN);
+  } else if (step_speed >= 50) {
+      SET(PORTD, ED_MS1_PIN);
+      CLR(PORTD, ED_MS2_PIN);
+  } else if (step_speed >= 25) {
+      CLR(PORTD, ED_MS1_PIN);
+      SET(PORTD, ED_MS2_PIN);
+  } else {
+      SET(PORTD, ED_MS1_PIN);
+      SET(PORTD, ED_MS2_PIN);
+  }
+}
+
 
 void ed_steps_forward() {
 //  digitalWrite(ED_ENABLE_PIN, LOW);
@@ -212,7 +233,7 @@ void ed_steps_backward() {
 #if DEBUG
   Serial.println("Backward");
 #endif
-//  digitalWrite(ED_DIR_PIN, HIGH); //Pull direction pin high to move "forward"
+//  digitalWrite(ED_DIR_PIN, HIGH); //Pull direction pin high to move "backwards"
   SET(PORTD, ED_DIR_PIN);
   for (x = 0; x < ED_STEP_SIZE_BACKWARD; x++) //Loop the forward stepping enough times for motion to be visible
   {
@@ -243,11 +264,11 @@ void setup_enable_rutine() {
 #endif
   pinMode(LED_ENABLE, OUTPUT);
   pinMode(PUSHBUTTON_ENABLE, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(PUSHBUTTON_ENABLE), isr_handler, RISING);
+  attachInterrupt(digitalPinToInterrupt(PUSHBUTTON_ENABLE), isr_enable_handler, RISING);
   enable = false;
 }
 
-void isr_handler() {
+void isr_enable_handler() {
   if (enable == true) {
     enable = false;
 //    digitalWrite(LED_ENABLE, LOW);
@@ -260,7 +281,7 @@ void isr_handler() {
   }
 }
 
-
+/*
 int read_speed_pot() {
   int value = analogRead(POT_SPEED);
   return map(value, 0, 1023, 0, 100);
@@ -270,4 +291,35 @@ int read_speed_pot() {
 int read_temp_pot() {
   int value = analogRead(POT_TEMP);
   return map(value, 0, 1023, -50, 50);
+}
+*/
+
+void setup_timer1() {
+  cli();
+
+  //set timer1 interrupt at 1Hz
+  TCCR1A = 0;// set entire TCCR1A register to 0
+  TCCR1B = 0;// same for TCCR1B
+  TCNT1  = 0;//initialize counter value to 0
+  // set compare match register for 1hz increments
+  OCR1A = 15624;// = (16*10^6) / (1*1024) - 1 (must be <65536)
+  // turn on CTC mode
+  TCCR1B |= (1 << WGM12);
+  // Set CS10 and CS12 bits for 1024 prescaler
+  TCCR1B |= (1 << CS12) | (1 << CS10);
+  // enable timer compare interrupt
+  TIMSK1 |= (1 << OCIE1A);
+
+  sei();
+
+}
+
+ISR(TIMER1_COMPA_vect){
+  int analog_speed = analogRead(POT_SPEED);
+  int set_speed = map(analog_speed, 0, 1023, 0, 100);
+  set_step_speed(set_speed);
+
+  int analog_temp = analogRead(POT_TEMP);
+  set_temp = map(analog_temp, 0, 1023, -50, 50);
+
 }

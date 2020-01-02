@@ -27,8 +27,8 @@
 
 // Heater def
 #define HEAT_ENABLE_PIN   7
-#define HEAT_UPPER_LIMIT  215
-#define HEAT_LOWER_LIMIT  212
+#define HEAT_DEFAULT_VALUE  230
+#define HEAT_HYSTERESIS   2
 #define HEATER_WARM_ENOUGH_SCALE 0.8
 
 // Pushbutton
